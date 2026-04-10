@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Python to Java Translator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="bg-shape bg-shape-a"></div>
+<div class="bg-shape bg-shape-b"></div>
+<main class="shell">
+    <header class="hero">
+        <p class="eyebrow">PYTHON TO JAVA</p>
+        <h1>Code Translator Workbench</h1>
+        <p class="subtitle">Write Python source code and generate validated Java output with logs and retries.</p>
+    </header>
+
+    <section class="controls">
+        <div class="label-like">
+            <span>Source Language</span>
+            <strong>Python</strong>
+        </div>
+        <div class="label-like">
+            <span>Target Language</span>
+            <strong>Java</strong>
+        </div>
+        <button id="generateBtn" type="button">Generate</button>
+    </section>
+
+    <section class="pane-grid">
+        <article class="pane">
+            <div class="pane-head">
+                <h2>Source Code</h2>
+            </div>
+            <textarea id="sourceCode" spellcheck="false" placeholder="Write source code here..."></textarea>
+        </article>
+        <article class="pane">
+            <div class="pane-head">
+                <h2>Target Code</h2>
+                <button id="copyBtn" type="button" class="ghost">Copy</button>
+            </div>
+            <textarea id="targetCode" spellcheck="false" readonly placeholder="Generated code appears here..."></textarea>
+        </article>
+    </section>
+
+    <section class="messages">
+        <pre id="statusBox" class="status" aria-live="polite"></pre>
+    </section>
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
