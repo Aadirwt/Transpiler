@@ -3,17 +3,20 @@ from __future__ import annotations
 import re
 
 from ..core.ast_nodes import Program
-from ..core.common_parser import CommonParser
 from ..core.errors import FrontendError
+from ..core.lexer import Lexer
+from ..core.parser import Parser
 
 
 class PythonFrontend:
     def __init__(self) -> None:
-        self.parser = CommonParser()
+        self.lexer_cls = Lexer
+        self.parser_cls = Parser
 
     def parse(self, source: str) -> Program:
         normalized = self._normalize(source)
-        return self.parser.parse(normalized)
+        tokens = self.lexer_cls(normalized).tokenize()
+        return self.parser_cls(tokens).parse()
 
     def _normalize(self, source: str) -> str:
         lines = source.splitlines()
