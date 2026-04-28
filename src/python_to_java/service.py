@@ -2,25 +2,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.transpiler.backends.java_backend import JavaBackend
+from src.transpiler.core.optimizer import TACOptimizer
 from src.transpiler.core.semantic import SemanticAnalyzer
+from src.transpiler.core.tac_generator import TACGenerator
+from src.transpiler.frontends.python_frontend import PythonFrontend
 
 from .autocorrect import AutoCorrector
 from .checker import SemanticChecker
 from .execution import ExecutionEngine
-from .generator import CodeGenerator
 from .input import InputHandler
 from .logger import Reporter
 from .models import TranslationResult
-from .parser import Parser
-from .transformer import Transformer
 
 
 class PythonToJavaCompilerService:
     def __init__(self, project_root: Path | None = None, max_retries: int = 2) -> None:
         self.input_handler = InputHandler()
-        self.parser = Parser()
-        self.transformer = Transformer()
-        self.generator = CodeGenerator()
+        self.frontend = PythonFrontend()
+        self.tac_generator = TACGenerator()
+        self.optimizer = TACOptimizer()
         self.execution = ExecutionEngine()
         self.checker = SemanticChecker()
         self.auto_corrector = AutoCorrector()
@@ -29,10 +30,12 @@ class PythonToJavaCompilerService:
 
     def translate(self, source_code: str) -> TranslationResult:
         preprocessed = self.input_handler.preprocess(source_code)
-        parsed = self.parser.parse(preprocessed)
-        SemanticAnalyzer(source_language="python").analyze(parsed.ast)
-        tac = self.transformer.transform(parsed.ast)
-        java_code = self.generator.generate(tac, parsed.imports)
+        ast = self.frontend.parse(preprocessed.code)
+        SemanticAnalyzer(source_language="python").analyze(ast)
+        tac = self.optimizer.optimize(self.tac_generator.generate(ast))
+        backend = JavaBackend()
+        backend.set_source_imports(preprocessed.imports)
+        java_code = backend.generate(tac)
 
         result = TranslationResult(java_code=java_code, tac=tac)
         python_run = self.execution.run_python(source_code)

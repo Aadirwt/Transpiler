@@ -3,21 +3,18 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from src.python_to_java.mapper import FunctionMapper, LibraryMapper
+from src.python_to_java.mapper import LibraryMapper
 from src.python_to_java.models import ImportSpec
 
 from ..core.tac import TACClass, TACFunction, TACInstruction, TACProgram
-from .cpp_backend import CppBackend
+from .base_backend import BaseBackend
 
 
-class JavaBackend(CppBackend):
+class JavaBackend(BaseBackend):
     def __init__(
         self,
-        function_mapper: FunctionMapper | None = None,
         library_mapper: LibraryMapper | None = None,
     ) -> None:
-        super().__init__()
-        self.function_mapper = function_mapper or FunctionMapper()
         self.library_mapper = library_mapper or LibraryMapper()
         self.source_imports: list[ImportSpec] = []
         self.imports: set[str] = set()
@@ -28,33 +25,9 @@ class JavaBackend(CppBackend):
         self.source_imports = imports
 
     def generate(self, program: TACProgram) -> str:
-        self.class_names = {cls.name for cls in program.classes}
-        self.class_field_types = {}
-        self.function_types = {}
-        self.method_types = {}
-        self.function_return_types = {}
-        self.method_return_types = {}
         self.imports = set(self.library_mapper.map_imports(self.source_imports))
         self.helpers = set()
-
-        for cls in program.classes:
-            field_types = self._infer_class_field_types(cls)
-            self.class_field_types[cls.name] = field_types
-            seed_types = self._seed_method_types(field_types)
-            for method in cls.methods:
-                types = self._infer_types(method, seed_types)
-                self.method_types[f"{cls.name}.{method.name}"] = types
-                if method.name != "__init__":
-                    self.method_return_types[f"{cls.name}.{method.name}"] = self._infer_return_type(
-                        method,
-                        types,
-                    )
-
-        for fn in program.functions:
-            types = self._infer_types(fn)
-            self.function_types[fn.name] = types
-            self.function_return_types[fn.name] = self._infer_return_type(fn, types)
-
+        self._prepare_program(program)
         main_types = self._infer_types(program.main)
 
         lines = [f"public class {self.wrapper_name} {{"]
@@ -343,6 +316,13 @@ class JavaBackend(CppBackend):
             elif name == "input":
                 types[inst.target] = "string"
         return types
+
+    def _external_type_to_internal(self, external_type: str) -> str:
+        return {
+            "String": "string",
+            "boolean": "bool",
+            "ArrayList<Integer>": "list",
+        }.get(external_type, external_type)
 
     def _infer_return_type(self, fn: TACFunction, types: Optional[dict[str, str]] = None) -> str:
         known = types or self._infer_types(fn)

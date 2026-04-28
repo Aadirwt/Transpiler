@@ -8,19 +8,23 @@ from .errors import FrontendError
 
 class TokenType(Enum):
     IF = "if"
+    ELIF = "elif"
     ELSE = "else"
     WHILE = "while"
     FOR = "for"
-    FUNCTION = "function"
+    IN = "in"
+    RANGE = "range"
+    FUNCTION = "def"
     RETURN = "return"
-    LET = "let"
     PRINT = "print"
-    PRINT_INLINE = "print_inline"
-    TRUE = "true"
-    FALSE = "false"
+    TRUE = "True"   
+    FALSE = "False"
     BREAK = "break"
     CONTINUE = "continue"
     CLASS = "class"
+    AND = "and"
+    OR = "or"
+    NOT = "not"
 
     PLUS = "+"
     MINUS = "-"
@@ -33,25 +37,48 @@ class TokenType(Enum):
     LE = "<="
     GT = ">"
     GE = ">="
-    AND = "&&"
-    OR = "||"
-    NOT = "!"
     LPAREN = "("
     RPAREN = ")"
     LBRACKET = "["
     RBRACKET = "]"
-    LBRACE = "{"
-    RBRACE = "}"
     COMMA = ","
-    SEMI = ";"
     DOT = "."
+    COLON = ":"
 
     IDENTIFIER = "identifier"
     NUMBER = "number"
     FLOAT = "float"
     STRING = "string"
 
+    NEWLINE = "newline"
+    INDENT = "indent"
+    DEDENT = "dedent"
     EOF = "eof"
+
+
+_KEYWORDS = {
+    token_type.value: token_type
+    for token_type in (
+        TokenType.IF,
+        TokenType.ELIF,
+        TokenType.ELSE,
+        TokenType.WHILE,
+        TokenType.FOR,
+        TokenType.IN,
+        TokenType.RANGE,
+        TokenType.FUNCTION,
+        TokenType.RETURN,
+        TokenType.PRINT,
+        TokenType.TRUE,
+        TokenType.FALSE,
+        TokenType.BREAK,
+        TokenType.CONTINUE,
+        TokenType.CLASS,
+        TokenType.AND,
+        TokenType.OR,
+        TokenType.NOT,
+    )
+}
 
 
 class Token:
@@ -66,177 +93,191 @@ class Token:
 
 class Lexer:
     def __init__(self, source: str):
-        self.source = source
-        self.pos = 0
-        self.line = 1
-        self.current_char = self.source[0] if source else None
-
-    def advance(self):
-        self.pos += 1
-        if self.pos >= len(self.source):
-            self.current_char = None
-        else:
-            if self.current_char == "\n":
-                self.line += 1
-            self.current_char = self.source[self.pos]
-
-    def skip_whitespace(self):
-        while self.current_char and self.current_char.isspace():
-            self.advance()
-
-    def read_number(self) -> Token:
-        result = ""
-        while self.current_char and (self.current_char.isdigit() or self.current_char == "."):
-            result += self.current_char
-            self.advance()
-        if "." in result:
-            return Token(TokenType.FLOAT, float(result), self.line)
-        return Token(TokenType.NUMBER, int(result), self.line)
-
-    def read_string(self) -> Token:
-        quote = self.current_char
-        self.advance()
-        result = ""
-        while self.current_char and self.current_char != quote:
-            if self.current_char == "\\":
-                self.advance()
-                if self.current_char == "n":
-                    result += "\n"
-                elif self.current_char == "t":
-                    result += "\t"
-                elif self.current_char == '"':
-                    result += '"'
-                elif self.current_char == "'":
-                    result += "'"
-                elif self.current_char == "\\":
-                    result += "\\"
-                else:
-                    result += self.current_char
-            else:
-                result += self.current_char
-            self.advance()
-        if self.current_char == quote:
-            self.advance()
-        return Token(TokenType.STRING, result, self.line)
-
-    def read_identifier_or_keyword(self) -> Token:
-        result = ""
-        while self.current_char and (self.current_char.isalnum() or self.current_char == "_"):
-            result += self.current_char
-            self.advance()
-        for token_type in TokenType:
-            if token_type.value == result:
-                return Token(token_type, result, self.line)
-        return Token(TokenType.IDENTIFIER, result, self.line)
+        self.source = source.replace("\r\n", "\n").replace("\r", "\n")
 
     def tokenize(self) -> list[Token]:
         tokens: list[Token] = []
-        while self.current_char is not None:
-            if self.current_char.isspace():
-                self.skip_whitespace()
+        indent_stack = [0]
+
+        for line_no, raw_line in enumerate(self.source.split("\n"), start=1):
+            expanded = raw_line.replace("\t", "    ")
+            uncommented = self._strip_comment(expanded).rstrip()
+            if not uncommented.strip():
                 continue
-            if self.current_char.isdigit():
-                tokens.append(self.read_number())
-            elif self.current_char in ('"', "'"):
-                tokens.append(self.read_string())
-            elif self.current_char.isalpha() or self.current_char == "_":
-                tokens.append(self.read_identifier_or_keyword())
-            elif self.current_char == "+":
-                tokens.append(Token(TokenType.PLUS, "+", self.line))
-                self.advance()
-            elif self.current_char == "-":
-                tokens.append(Token(TokenType.MINUS, "-", self.line))
-                self.advance()
-            elif self.current_char == "*":
-                tokens.append(Token(TokenType.STAR, "*", self.line))
-                self.advance()
-            elif self.current_char == "/":
-                self.advance()
-                if self.current_char == "/":
-                    while self.current_char and self.current_char != "\n":
-                        self.advance()
-                elif self.current_char == "*":
-                    self.advance()
-                    while self.current_char:
-                        if self.current_char == "*":
-                            self.advance()
-                            if self.current_char == "/":
-                                self.advance()
-                                break
-                        else:
-                            self.advance()
-                else:
-                    tokens.append(Token(TokenType.SLASH, "/", self.line))
-            elif self.current_char == "=":
-                self.advance()
-                if self.current_char == "=":
-                    tokens.append(Token(TokenType.EQ, "==", self.line))
-                    self.advance()
-                else:
-                    tokens.append(Token(TokenType.ASSIGN, "=", self.line))
-            elif self.current_char == "!":
-                self.advance()
-                if self.current_char == "=":
-                    tokens.append(Token(TokenType.NE, "!=", self.line))
-                    self.advance()
-                else:
-                    tokens.append(Token(TokenType.NOT, "!", self.line))
-            elif self.current_char == "<":
-                self.advance()
-                if self.current_char == "=":
-                    tokens.append(Token(TokenType.LE, "<=", self.line))
-                    self.advance()
-                else:
-                    tokens.append(Token(TokenType.LT, "<", self.line))
-            elif self.current_char == ">":
-                self.advance()
-                if self.current_char == "=":
-                    tokens.append(Token(TokenType.GE, ">=", self.line))
-                    self.advance()
-                else:
-                    tokens.append(Token(TokenType.GT, ">", self.line))
-            elif self.current_char == "&":
-                self.advance()
-                if self.current_char == "&":
-                    tokens.append(Token(TokenType.AND, "&&", self.line))
-                    self.advance()
-                else:
-                    raise FrontendError(f"Unexpected character '&' at line {self.line}")
-            elif self.current_char == "|":
-                self.advance()
-                if self.current_char == "|":
-                    tokens.append(Token(TokenType.OR, "||", self.line))
-                    self.advance()
-                else:
-                    raise FrontendError(f"Unexpected character '|' at line {self.line}")
-            elif self.current_char == "(":
-                tokens.append(Token(TokenType.LPAREN, "(", self.line))
-                self.advance()
-            elif self.current_char == ")":
-                tokens.append(Token(TokenType.RPAREN, ")", self.line))
-                self.advance()
-            elif self.current_char == "[":
-                tokens.append(Token(TokenType.LBRACKET, "[", self.line))
-                self.advance()
-            elif self.current_char == "]":
-                tokens.append(Token(TokenType.RBRACKET, "]", self.line))
-                self.advance()
-            elif self.current_char == "{":
-                tokens.append(Token(TokenType.LBRACE, "{", self.line))
-                self.advance()
-            elif self.current_char == "}":
-                tokens.append(Token(TokenType.RBRACE, "}", self.line))
-                self.advance()
-            elif self.current_char == ",":
-                tokens.append(Token(TokenType.COMMA, ",", self.line))
-                self.advance()
-            elif self.current_char == ";":
-                tokens.append(Token(TokenType.SEMI, ";", self.line))
-                self.advance()
-            elif self.current_char == ".":
-                tokens.append(Token(TokenType.DOT, ".", self.line))
-                self.advance()
+
+            indent = len(uncommented) - len(uncommented.lstrip(" "))
+            if indent > indent_stack[-1]:
+                indent_stack.append(indent)
+                tokens.append(Token(TokenType.INDENT, None, line_no))
             else:
-                raise FrontendError(f"Illegal character '{self.current_char}' at line {self.line}")
-        tokens.append(Token(TokenType.EOF, None, self.line))
+                while indent < indent_stack[-1]:
+                    indent_stack.pop()
+                    tokens.append(Token(TokenType.DEDENT, None, line_no))
+                if indent != indent_stack[-1]:
+                    raise FrontendError(f"Inconsistent indentation at line {line_no}.")
+
+            content = uncommented.lstrip(" ")
+            tokens.extend(self._tokenize_line(content, line_no))
+            tokens.append(Token(TokenType.NEWLINE, None, line_no))
+
+        while len(indent_stack) > 1:
+            indent_stack.pop()
+            tokens.append(Token(TokenType.DEDENT, None, 0))
+
+        tokens.append(Token(TokenType.EOF, None, 0))
         return tokens
+
+    def _strip_comment(self, line: str) -> str:
+        quote: str | None = None
+        escaped = False
+        chars: list[str] = []
+
+        for ch in line:
+            if quote is not None:
+                chars.append(ch)
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == quote:
+                    quote = None
+                continue
+
+            if ch in {'"', "'"}:
+                quote = ch
+                chars.append(ch)
+                continue
+            if ch == "#":
+                break
+            chars.append(ch)
+
+        return "".join(chars)
+
+    def _tokenize_line(self, line: str, line_no: int) -> list[Token]:
+        tokens: list[Token] = []
+        pos = 0
+
+        while pos < len(line):
+            ch = line[pos]
+            if ch.isspace():
+                pos += 1
+                continue
+
+            if ch.isdigit():
+                token, pos = self._read_number(line, pos, line_no)
+                tokens.append(token)                
+                continue
+
+            if ch in {'"', "'"}:
+                token, pos = self._read_string(line, pos, line_no)
+                tokens.append(token)
+                continue
+
+            if ch.isalpha() or ch == "_":
+                token, pos = self._read_identifier(line, pos, line_no)
+                tokens.append(token)
+                continue
+
+            if pos + 1 < len(line):
+                pair = line[pos : pos + 2]
+                if pair == "==":
+                    tokens.append(Token(TokenType.EQ, pair, line_no))
+                    pos += 2
+                    continue
+                if pair == "!=":
+                    tokens.append(Token(TokenType.NE, pair, line_no))
+                    pos += 2
+                    continue
+                if pair == "<=":
+                    tokens.append(Token(TokenType.LE, pair, line_no))
+                    pos += 2
+                    continue
+                if pair == ">=":
+                    tokens.append(Token(TokenType.GE, pair, line_no))
+                    pos += 2
+                    continue
+
+            single_tokens = {
+                "+": TokenType.PLUS,
+                "-": TokenType.MINUS,
+                "*": TokenType.STAR,
+                "/": TokenType.SLASH,
+                "=": TokenType.ASSIGN,
+                "<": TokenType.LT,
+                ">": TokenType.GT,
+                "(": TokenType.LPAREN,
+                ")": TokenType.RPAREN,
+                "[": TokenType.LBRACKET,
+                "]": TokenType.RBRACKET,
+                ",": TokenType.COMMA,
+                ".": TokenType.DOT,
+                ":": TokenType.COLON,
+            }
+            token_type = single_tokens.get(ch)
+            if token_type is None:
+                raise FrontendError(f"Illegal character '{ch}' at line {line_no}")
+            tokens.append(Token(token_type, ch, line_no))
+            pos += 1
+
+        return tokens
+
+    def _read_number(self, line: str, pos: int, line_no: int) -> tuple[Token, int]:
+        start = pos
+        has_dot = False
+        while pos < len(line):
+            ch = line[pos]
+            if ch.isdigit():
+                pos += 1
+                continue
+            if ch == "." and not has_dot and pos + 1 < len(line) and line[pos + 1].isdigit():
+                has_dot = True
+                pos += 1
+                continue
+            break
+
+        text = line[start:pos]
+        if has_dot:
+            return Token(TokenType.FLOAT, float(text), line_no), pos
+        return Token(TokenType.NUMBER, int(text), line_no), pos
+
+    def _read_string(self, line: str, pos: int, line_no: int) -> tuple[Token, int]:
+        quote = line[pos]
+        pos += 1
+        result = ""
+
+        while pos < len(line):
+            ch = line[pos]
+            if ch == "\\":
+                pos += 1
+                if pos >= len(line):
+                    break
+                escaped = line[pos]
+                if escaped == "n":
+                    result += "\n"
+                elif escaped == "t":
+                    result += "\t"
+                else:
+                    result += escaped
+                pos += 1
+                continue
+            if ch == quote:
+                pos += 1
+                return Token(TokenType.STRING, result, line_no), pos
+            result += ch
+            pos += 1
+
+        raise FrontendError(f"Unterminated string at line {line_no}")
+
+    def _read_identifier(self, line: str, pos: int, line_no: int) -> tuple[Token, int]:
+        start = pos
+        while pos < len(line) and (line[pos].isalnum() or line[pos] == "_"):
+            pos += 1
+        text = line[start:pos]
+        token_type = _KEYWORDS.get(text, TokenType.IDENTIFIER)
+        if token_type == TokenType.AND:
+            return Token(token_type, "&&", line_no), pos
+        if token_type == TokenType.OR:
+            return Token(token_type, "||", line_no), pos
+        if token_type == TokenType.NOT:
+            return Token(token_type, "!", line_no), pos
+        return Token(token_type, text, line_no), pos

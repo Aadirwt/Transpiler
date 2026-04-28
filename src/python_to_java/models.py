@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from src.transpiler.core.ast_nodes import Program
 from src.transpiler.core.tac import TACProgram
 
 
@@ -18,14 +17,6 @@ class ImportSpec:
 class PreprocessedInput:
     code: str
     imports: list[ImportSpec]
-
-
-@dataclass
-class ParsedPythonModule:
-    source: str
-    imports: list[ImportSpec]
-    ast: Program
-
 
 @dataclass
 class ExecutionResult:

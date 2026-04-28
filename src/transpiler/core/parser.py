@@ -13,7 +13,6 @@ from .ast_nodes import (
     For,
     FunctionDef,
     If,
-    LetDecl,
     Literal,
     ListLiteral,
     Member,
@@ -35,7 +34,7 @@ class Parser:
         self.pos = 0
         self.current_token = self.tokens[0] if tokens else None
 
-    def advance(self):
+    def advance(self) -> None:
         self.pos += 1
         if self.pos < len(self.tokens):
             self.current_token = self.tokens[self.pos]
@@ -60,43 +59,46 @@ class Parser:
             f"{self.current_token.line if self.current_token else 'EOF'}"
         )
 
+    def skip_newlines(self) -> None:
+        while self.current_token and self.current_token.type == TokenType.NEWLINE:
+            self.advance()
+
     def parse(self) -> Program:
-        statements = self.parse_statement_list_opt()
+        statements = self.parse_statement_list_opt(stop_tokens={TokenType.EOF})
         self.expect(TokenType.EOF)
         return Program(statements)
 
-    def parse_statement_list_opt(self) -> list[Any]:
+    def parse_statement_list_opt(self, stop_tokens: set[TokenType]) -> list[Any]:
         statements = []
-        while self.current_token and self.current_token.type not in (
-            TokenType.RBRACE,
-            TokenType.EOF,
-        ):
-            stmt = self.parse_statement()
-            statements.append(stmt)
+        self.skip_newlines()
+        while self.current_token and self.current_token.type not in stop_tokens:
+            statements.append(self.parse_statement())
+            self.skip_newlines()
         return statements
 
     def parse_statement(self) -> Any:
-        if self.current_token.type == TokenType.LET:
-            return self.parse_let_statement()
-        if self.current_token.type in (TokenType.PRINT, TokenType.PRINT_INLINE):
+        token_type = self.current_token.type
+        if token_type == TokenType.PRINT:
             return self.parse_print_statement()
-        if self.current_token.type == TokenType.IF:
+        if token_type == TokenType.IF:
             return self.parse_if_statement()
-        if self.current_token.type == TokenType.WHILE:
+        if token_type == TokenType.WHILE:
             return self.parse_while_statement()
-        if self.current_token.type == TokenType.FOR:
+        if token_type == TokenType.FOR:
             return self.parse_for_statement()
-        if self.current_token.type == TokenType.FUNCTION:
+        if token_type == TokenType.FUNCTION:
             return self.parse_function_statement()
-        if self.current_token.type == TokenType.CLASS:
+        if token_type == TokenType.CLASS:
             return self.parse_class_statement()
-        if self.current_token.type == TokenType.RETURN:
+        if token_type == TokenType.RETURN:
             return self.parse_return_statement()
-        if self.current_token.type == TokenType.BREAK:
+        if token_type == TokenType.BREAK:
             return self.parse_break_statement()
-        if self.current_token.type == TokenType.CONTINUE:
+        if token_type == TokenType.CONTINUE:
             return self.parse_continue_statement()
+        return self.parse_assignment_or_expr_statement()
 
+    def parse_assignment_or_expr_statement(self) -> Any:
         saved_pos = self.pos
         saved_current = self.current_token
         try:
@@ -104,7 +106,7 @@ class Parser:
             if self.current_token and self.current_token.type == TokenType.ASSIGN:
                 self.advance()
                 value = self.parse_expression()
-                self.expect(TokenType.SEMI)
+                self.expect_line_end()
                 if isinstance(lvalue, str):
                     return Assign(name=lvalue, value=value)
                 return MemberAssign(target=lvalue, value=value)
@@ -115,16 +117,8 @@ class Parser:
             self.current_token = saved_current
 
         expr = self.parse_expression()
-        self.expect(TokenType.SEMI)
+        self.expect_line_end()
         return ExprStmt(expr=expr)
-
-    def parse_let_statement(self) -> LetDecl:
-        self.expect(TokenType.LET)
-        name = self.expect(TokenType.IDENTIFIER).value
-        self.expect(TokenType.ASSIGN)
-        value = self.parse_expression()
-        self.expect(TokenType.SEMI)
-        return LetDecl(name=name, value=value)
 
     def parse_lvalue(self) -> Any:
         name = self.expect(TokenType.IDENTIFIER).value
@@ -136,98 +130,100 @@ class Parser:
         return lvalue
 
     def parse_print_statement(self) -> Print:
-        is_inline = self.current_token.type == TokenType.PRINT_INLINE
-        self.advance()
+        self.expect(TokenType.PRINT)
+        newline = True
+        values: list[Any] = []
+
         if self.current_token and self.current_token.type == TokenType.LPAREN:
             self.advance()
-            args = self.parse_argument_list_opt()
+            if self.current_token and self.current_token.type != TokenType.RPAREN:
+                while True:
+                    if (
+                        self.current_token.type == TokenType.IDENTIFIER
+                        and self.current_token.value == "end"
+                        and self.peek()
+                        and self.peek().type == TokenType.ASSIGN
+                    ):
+                        self.advance()
+                        self.advance()
+                        end_value = self.parse_expression()
+                        if not isinstance(end_value, Literal) or end_value.value != "":
+                            raise FrontendError("Only print(..., end='') is supported.")
+                        newline = False
+                    else:
+                        values.append(self.parse_expression())
+
+                    if not self.current_token or self.current_token.type != TokenType.COMMA:
+                        break
+                    self.advance()
             self.expect(TokenType.RPAREN)
         else:
-            args = [self.parse_expression()]
-        self.expect(TokenType.SEMI)
-        return Print(values=args, newline=not is_inline)
+            values.append(self.parse_expression())
+
+        self.expect_line_end()
+        return Print(values=values, newline=newline)
 
     def parse_if_statement(self) -> If:
         self.expect(TokenType.IF)
-        self.expect(TokenType.LPAREN)
         condition = self.parse_expression()
-        self.expect(TokenType.RPAREN)
-        then_body = self.parse_block()
+        then_body = self.parse_suite()
         else_body = self.parse_else_part()
         return If(condition=condition, then_body=then_body, else_body=else_body)
 
     def parse_else_part(self) -> list[Any]:
+        if self.current_token and self.current_token.type == TokenType.ELIF:
+            self.advance()
+            condition = self.parse_expression()
+            then_body = self.parse_suite()
+            nested_else = self.parse_else_part()
+            return [If(condition=condition, then_body=then_body, else_body=nested_else)]
         if self.current_token and self.current_token.type == TokenType.ELSE:
             self.advance()
-            if self.current_token and self.current_token.type == TokenType.IF:
-                return [self.parse_if_statement()]
-            return self.parse_block()
+            return self.parse_suite()
         return []
 
     def parse_while_statement(self) -> While:
         self.expect(TokenType.WHILE)
-        self.expect(TokenType.LPAREN)
         condition = self.parse_expression()
-        self.expect(TokenType.RPAREN)
-        body = self.parse_block()
+        body = self.parse_suite()
         return While(condition=condition, body=body)
 
     def parse_for_statement(self) -> For:
         self.expect(TokenType.FOR)
+        name = self.expect(TokenType.IDENTIFIER).value
+        self.expect(TokenType.IN)
+        self.expect(TokenType.RANGE)
         self.expect(TokenType.LPAREN)
-        init = self.parse_for_init()
-        self.expect(TokenType.SEMI)
-        condition = self.parse_expression_opt()
-        self.expect(TokenType.SEMI)
-        increment = self.parse_for_step()
+        args = self.parse_argument_list_opt()
         self.expect(TokenType.RPAREN)
-        body = self.parse_block()
+        body = self.parse_suite()
+        return self.build_range_for(name, args, body)
+
+    def build_range_for(self, name: str, args: list[Any], body: list[Any]) -> For:
+        if len(args) == 1:
+            start, end, step = Literal(0), args[0], Literal(1)
+        elif len(args) == 2:
+            start, end, step = args[0], args[1], Literal(1)
+        elif len(args) == 3:
+            start, end, step = args[0], args[1], args[2]
+        else:
+            raise FrontendError("range() supports 1 to 3 arguments only.")
+
+        compare_op = ">" if self.is_negative_step(step) else "<"
+        init = Assign(name=name, value=start)
+        condition = Binary(Variable(name), compare_op, end)
+        increment = Assign(name=name, value=Binary(Variable(name), "+", step))
         return For(init=init, condition=condition, increment=increment, body=body)
 
-    def parse_for_init(self) -> Any | None:
-        if self.current_token.type == TokenType.LET:
-            return self.parse_let_core()
-        if self.current_token.type == TokenType.IDENTIFIER and self.peek() and self.peek().type == TokenType.ASSIGN:
-            return self.parse_assign_core()
-        return None
-
-    def parse_let_core(self) -> LetDecl:
-        self.expect(TokenType.LET)
-        name = self.expect(TokenType.IDENTIFIER).value
-        self.expect(TokenType.ASSIGN)
-        value = self.parse_expression()
-        return LetDecl(name=name, value=value)
-
-    def parse_assign_core(self) -> Any:
-        lvalue = self.parse_lvalue()
-        self.expect(TokenType.ASSIGN)
-        value = self.parse_expression()
-        if isinstance(lvalue, str):
-            return Assign(name=lvalue, value=value)
-        return MemberAssign(target=lvalue, value=value)
-
-    def parse_for_step(self) -> Any | None:
-        if not self.current_token:
-            return None
-
-        saved_pos = self.pos
-        saved_current = self.current_token
-        try:
-            lvalue = self.parse_lvalue()
-            if self.current_token and self.current_token.type == TokenType.ASSIGN:
-                self.advance()
-                value = self.parse_expression()
-                if isinstance(lvalue, str):
-                    return Assign(name=lvalue, value=value)
-                return MemberAssign(target=lvalue, value=value)
-            self.pos = saved_pos
-            self.current_token = saved_current
-        except Exception:
-            self.pos = saved_pos
-            self.current_token = saved_current
-
-        expr = self.parse_expression()
-        return ExprStmt(expr)
+    def is_negative_step(self, step: Any) -> bool:
+        if isinstance(step, Literal) and isinstance(step.value, (int, float)):
+            return step.value < 0
+        return (
+            isinstance(step, Unary)
+            and step.op == "-"
+            and isinstance(step.value, Literal)
+            and isinstance(step.value.value, (int, float))
+        )
 
     def parse_function_statement(self) -> FunctionDef:
         self.expect(TokenType.FUNCTION)
@@ -235,30 +231,54 @@ class Parser:
         self.expect(TokenType.LPAREN)
         params = self.parse_param_list_opt()
         self.expect(TokenType.RPAREN)
-        body = self.parse_block()
+        body = self.parse_suite()
         return FunctionDef(name=name, params=params, body=body)
 
     def parse_class_statement(self) -> ClassDef:
         self.expect(TokenType.CLASS)
         name = self.expect(TokenType.IDENTIFIER).value
-        methods = self.parse_class_block()
-        return ClassDef(name=name, methods=methods)
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+        methods = self.parse_statement_list_opt(stop_tokens={TokenType.DEDENT})
+        self.expect(TokenType.DEDENT)
+        typed_methods = [method for method in methods if isinstance(method, FunctionDef)]
+        return ClassDef(name=name, methods=typed_methods)
 
-    def parse_class_block(self) -> list[FunctionDef]:
-        self.expect(TokenType.LBRACE)
-        methods = []
-        while self.current_token and self.current_token.type != TokenType.RBRACE:
-            methods.append(self.parse_class_member())
-        self.expect(TokenType.RBRACE)
-        return methods
+    def parse_return_statement(self) -> Return:
+        self.expect(TokenType.RETURN)
+        value = None
+        if self.current_token and self.current_token.type not in (TokenType.NEWLINE, TokenType.EOF):
+            value = self.parse_expression()
+        self.expect_line_end()
+        return Return(value=value)
 
-    def parse_class_member(self) -> FunctionDef:
-        name = self.expect(TokenType.IDENTIFIER).value
-        self.expect(TokenType.LPAREN)
-        params = self.parse_param_list_opt()
-        self.expect(TokenType.RPAREN)
-        body = self.parse_block()
-        return FunctionDef(name=name, params=params, body=body)
+    def parse_break_statement(self) -> Break:
+        self.expect(TokenType.BREAK)
+        self.expect_line_end()
+        return Break()
+
+    def parse_continue_statement(self) -> Continue:
+        self.expect(TokenType.CONTINUE)
+        self.expect_line_end()
+        return Continue()
+
+    def parse_suite(self) -> list[Any]:
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+        statements = self.parse_statement_list_opt(stop_tokens={TokenType.DEDENT})
+        self.expect(TokenType.DEDENT)
+        return statements
+
+    def expect_line_end(self) -> None:
+        if self.current_token and self.current_token.type == TokenType.NEWLINE:
+            self.advance()
+            return
+        if self.current_token and self.current_token.type in {TokenType.DEDENT, TokenType.EOF}:
+            return
+        actual = self.current_token.value if self.current_token else "EOF"
+        raise FrontendError(f"Expected line end, got {actual}")
 
     def parse_param_list_opt(self) -> list[str]:
         params = []
@@ -268,49 +288,6 @@ class Parser:
                 self.advance()
                 params.append(self.expect(TokenType.IDENTIFIER).value)
         return params
-
-    def parse_return_statement(self) -> Return:
-        self.expect(TokenType.RETURN)
-        value = self.parse_expression_opt()
-        self.expect(TokenType.SEMI)
-        return Return(value=value)
-
-    def parse_break_statement(self) -> Break:
-        self.expect(TokenType.BREAK)
-        self.expect(TokenType.SEMI)
-        return Break()
-
-    def parse_continue_statement(self) -> Continue:
-        self.expect(TokenType.CONTINUE)
-        self.expect(TokenType.SEMI)
-        return Continue()
-
-    def parse_expr_statement(self) -> ExprStmt:
-        expr = self.parse_expression()
-        self.expect(TokenType.SEMI)
-        return ExprStmt(expr=expr)
-
-    def parse_block(self) -> list[Any]:
-        self.expect(TokenType.LBRACE)
-        statements = self.parse_statement_list_opt()
-        self.expect(TokenType.RBRACE)
-        return statements
-
-    def parse_expression_opt(self) -> Any | None:
-        if self.current_token and self.current_token.type in (
-            TokenType.IDENTIFIER,
-            TokenType.LPAREN,
-            TokenType.MINUS,
-            TokenType.NOT,
-            TokenType.NUMBER,
-            TokenType.FLOAT,
-            TokenType.STRING,
-            TokenType.TRUE,
-            TokenType.FALSE,
-            TokenType.LBRACKET,
-        ):
-            return self.parse_expression()
-        return None
 
     def parse_expression(self) -> Any:
         return self.parse_logical_or()
@@ -378,13 +355,11 @@ class Parser:
         if self.current_token and self.current_token.type == TokenType.NOT:
             op = self.current_token.value
             self.advance()
-            expr = self.parse_unary()
-            return Unary(op, expr)
+            return Unary(op, self.parse_unary())
         if self.current_token and self.current_token.type == TokenType.MINUS:
             op = self.current_token.value
             self.advance()
-            expr = self.parse_unary()
-            return Unary(op, expr)
+            return Unary(op, self.parse_unary())
         return self.parse_postfix()
 
     def parse_postfix(self) -> Any:
@@ -392,9 +367,8 @@ class Parser:
         while self.current_token and self.current_token.type in (TokenType.DOT, TokenType.LPAREN):
             if self.current_token.type == TokenType.DOT:
                 self.advance()
-                name = self.expect(TokenType.IDENTIFIER).value
-                expr = Member(expr, name)
-            elif self.current_token.type == TokenType.LPAREN:
+                expr = Member(expr, self.expect(TokenType.IDENTIFIER).value)
+            else:
                 self.advance()
                 args = self.parse_argument_list_opt()
                 self.expect(TokenType.RPAREN)
@@ -437,10 +411,7 @@ class Parser:
 
     def parse_argument_list_opt(self) -> list[Any]:
         args = []
-        if self.current_token and self.current_token.type not in (
-            TokenType.RPAREN,
-            TokenType.RBRACKET,
-        ):
+        if self.current_token and self.current_token.type != TokenType.RPAREN:
             args.append(self.parse_expression())
             while self.current_token and self.current_token.type == TokenType.COMMA:
                 self.advance()
@@ -449,6 +420,8 @@ class Parser:
 
     def parse_list_literal(self) -> ListLiteral:
         self.expect(TokenType.LBRACKET)
-        values = self.parse_argument_list_opt()
+        values = []
+        if self.current_token and self.current_token.type != TokenType.RBRACKET:
+            values = self.parse_argument_list_opt()
         self.expect(TokenType.RBRACKET)
         return ListLiteral(values=values)
