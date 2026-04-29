@@ -63,5 +63,3 @@ To translate a specific Python file to a Java file:
 python main.py --input path/to/source.py --output path/to/output.java
 ```
 
-## Contributing
-Contributions are welcome! Please feel free to submit a Pull Request.
