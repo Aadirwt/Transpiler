@@ -124,6 +124,16 @@ BUILTIN_RETURN_TYPES = {
     "max": T_INT,
     "abs": T_INT,
     "round": T_INT,
+    "math.sqrt": T_DOUBLE,
+    "math.pow": T_DOUBLE,
+    "math.floor": T_DOUBLE,
+    "math.ceil": T_DOUBLE,
+    "math.sin": T_DOUBLE,
+    "math.cos": T_DOUBLE,
+    "math.tan": T_DOUBLE,
+    "math.log": T_DOUBLE,
+    "math.exp": T_DOUBLE,
+    "math.fabs": T_DOUBLE,
 }
 
 
@@ -312,6 +322,8 @@ class TypeInferencer:
                 result = element_type(obj)
             elif obj.name == "String" and node.func.attr in {"upper", "lower", "strip", "replace"}:
                 result = T_STRING
+            elif isinstance(node.func.obj, Identifier) and node.func.obj.name == "math":
+                result = T_DOUBLE
             elif node.func.attr in self.func_return_map:
                 result = self.func_return_map[node.func.attr]
         node._java_type = result

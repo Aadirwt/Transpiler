@@ -7,10 +7,9 @@ from src.python_to_java.mapper import LibraryMapper
 from src.python_to_java.models import ImportSpec
 
 from ..core.tac import TACClass, TACFunction, TACInstruction, TACProgram
-from .base_backend import BaseBackend
 
 
-class JavaBackend(BaseBackend):
+class JavaBackend:
     def __init__(
         self,
         library_mapper: LibraryMapper | None = None,
@@ -27,9 +26,7 @@ class JavaBackend(BaseBackend):
     def generate(self, program: TACProgram) -> str:
         self.imports = set(self.library_mapper.map_imports(self.source_imports))
         self.helpers = set()
-        self._prepare_program(program)
-        main_types = self._infer_types(program.main)
-
+        
         lines = [f"public class {self.wrapper_name} {{"]
 
         for cls in program.classes:
@@ -40,7 +37,7 @@ class JavaBackend(BaseBackend):
             lines.extend(self._emit_function(fn))
             lines.append("")
 
-        lines.extend(self._emit_main(program.main, main_types))
+        lines.extend(self._emit_main(program.main))
 
         if self.helpers:
             lines.append("")
@@ -57,8 +54,17 @@ class JavaBackend(BaseBackend):
             return "\n".join(import_lines + [""] + lines)
         return "\n".join(lines)
 
+    def _extract_class_fields(self, cls: TACClass) -> dict[str, object]:
+        fields = {}
+        for method in cls.methods:
+            for inst in method.instructions:
+                if inst.kind == "member_assign" and inst.object_ref in {"self", "this"}:
+                    if inst.member and inst.member not in fields:
+                        fields[inst.member] = inst.java_type or "int"
+        return fields
+
     def _emit_class(self, cls: TACClass) -> list[str]:
-        field_types = self.class_field_types.get(cls.name, {})
+        field_types = self._extract_class_fields(cls)
         lines = [f"    static class {cls.name} {{"]
 
         for field, typ in sorted(field_types.items()):
@@ -68,22 +74,21 @@ class JavaBackend(BaseBackend):
 
         ctor = self._find_constructor(cls)
         if ctor is not None:
-            ctor_types = self.method_types.get(f"{cls.name}.{ctor.name}", {})
+            types = ctor.local_types or {}
             ctor_params = self._user_params(ctor)
             lines.append(
-                f"        {cls.name}({', '.join(self._param_decl(name, ctor_types) for name in ctor_params)}) {{"
+                f"        {cls.name}({', '.join(self._param_decl(name, types) for name in ctor_params)}) {{"
             )
-            lines.extend(self._emit_decls(ctor, 3, ctor_types, omit_self=True))
-            lines.extend(self._emit_body(ctor.instructions, 3, ctor_types, in_constructor=True))
+            lines.extend(self._emit_decls(ctor, 3, types, omit_self=True))
+            lines.extend(self._emit_body(ctor.instructions, 3, types, in_constructor=True))
             lines.append("        }")
 
         for method in cls.methods:
             if method.name == "__init__":
                 continue
-            types = self.method_types.get(f"{cls.name}.{method.name}", {})
+            types = method.local_types or {}
             params = self._user_params(method) if self._is_instance_method(method) else method.params
-            return_type_obj = self._infer_return_type(method, types)
-            return_type = self._java_type(return_type_obj)
+            return_type = self._java_type(method.return_type or "int")
             static_kw = "" if self._is_instance_method(method) else "static "
             lines.append(
                 f"        {static_kw}{return_type} {method.name}({', '.join(self._param_decl(name, types) for name in params)}) {{"
@@ -98,9 +103,8 @@ class JavaBackend(BaseBackend):
         return lines
 
     def _emit_function(self, fn: TACFunction) -> list[str]:
-        types = self.function_types.get(fn.name, self._infer_types(fn))
-        return_type_obj = self._infer_return_type(fn, types)
-        return_type = self._java_type(return_type_obj)
+        types = fn.local_types or {}
+        return_type = self._java_type(fn.return_type or "int")
         lines = [
             f"    static {return_type} {fn.name}({', '.join(self._param_decl(name, types) for name in fn.params)}) {{"
         ]
@@ -111,7 +115,8 @@ class JavaBackend(BaseBackend):
         lines.append("    }")
         return lines
 
-    def _emit_main(self, main: TACFunction, types: dict[str, str]) -> list[str]:
+    def _emit_main(self, main: TACFunction) -> list[str]:
+        types = main.local_types or {}
         lines = ["    public static void main(String[] args) {"] 
         lines.extend(self._emit_decls(main, 2, types))
         lines.extend(self._emit_body(main.instructions, 2, types, return_type="void"))
@@ -122,7 +127,7 @@ class JavaBackend(BaseBackend):
         self,
         fn: TACFunction,
         indent: int,
-        types: dict[str, str],
+        types: dict[str, object],
         omit_self: bool = False,
     ) -> list[str]:
         params = set(fn.params)
@@ -212,7 +217,7 @@ class JavaBackend(BaseBackend):
         args = [self._expr(arg) for arg in inst.args]
 
         if name == "len" and inst.target and args:
-            arg_type = self._infer_expr_type(inst.args[0] if inst.args else None, types)
+            arg_type = self._expr_type(inst.args[0] if inst.args else None, types)
             arg_name = self._internal_type_name(arg_type)
             if arg_name == "string":
                 return f"{inst.target} = {args[0]}.length();"
@@ -244,10 +249,6 @@ class JavaBackend(BaseBackend):
             self.imports.add("import java.util.Scanner;")
             return f"{inst.target} = inputHelper();"
 
-        if name in self.class_names:
-            call = f"new {name}({', '.join(args)})"
-            return f"{inst.target} = {call};" if inst.target else f"{call};"
-
         if name.endswith(".append") and len(args) == 1:
             owner = self._expr(name.rsplit(".", 1)[0])
             return f"{owner}.add({args[0]});"
@@ -274,6 +275,12 @@ class JavaBackend(BaseBackend):
                 return f"{inst.target} = randomIntHelper({args[0]}, {args[1]});"
 
         call = f"{self._expr(name)}({', '.join(args)})"
+        if call.startswith("new "):
+            return f"{inst.target} = {call};" if inst.target else f"{call};"
+        
+        if name.isidentifier() and name[0].isupper():
+            call = f"new {name}({', '.join(args)})"
+
         return f"{inst.target} = {call};" if inst.target else f"{call};"
 
     def _map_math_call(self, name: str) -> str:
@@ -324,65 +331,21 @@ class JavaBackend(BaseBackend):
             ]
         return []
 
-    def _infer_types(
-        self,
-        fn: TACFunction,
-        seed_types: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        types = super()._infer_types(fn, seed_types)
-        for inst in fn.instructions:
-            if inst.kind != "call" or not inst.target:
-                continue
-            if inst.java_type is not None:
-                types[inst.target] = inst.java_type
-                continue
-            name = (inst.name or "").strip()
-            if name == "len":
-                types[inst.target] = "int"
-            elif name in {"sum", "min", "max"}:
-                types[inst.target] = "int"
-            elif name.startswith("math."):
-                types[inst.target] = "double"
-            elif name.startswith("random."):
-                types[inst.target] = "int"
-            elif name == "input":
-                types[inst.target] = "string"
-        return types
-
-    def _external_type_to_internal(self, external_type: object) -> object:
-        if not isinstance(external_type, str):
-            return external_type
-        return {
-            "String": "string",
-            "boolean": "bool",
-            "ArrayList<Integer>": "list",
-        }.get(external_type, external_type)
-
-    def _infer_return_type(self, fn: TACFunction, types: Optional[dict[str, object]] = None) -> object:
-        if getattr(fn, "return_type", None) is not None:
-            return fn.return_type
-        known = types or self._infer_types(fn)
-        seen: set[str] = set()
-        for inst in fn.instructions:
-            if inst.kind == "return" and inst.value is not None:
-                seen.add(self._internal_type_name(self._infer_expr_type(inst.value, known)))
-
-        if not seen:
+    def _expr_type(self, text: str | None, types: dict[str, object]) -> object:
+        if not text:
             return "int"
-        if "list" in seen:
-            return "ArrayList<Integer>"
-        if "string" in seen:
-            return "String"
-        if "double" in seen:
-            return "double"
-        if "bool" in seen:
-            return "boolean"
-        return "int"
-
-    def _infer_expr_type(self, text: str | None, known: dict[str, object]) -> object:
-        if text and text.strip().startswith("__list__("):
+        stripped = text.strip()
+        if stripped in types:
+            return types[stripped]
+        if stripped.startswith("__list__("):
             return "list"
-        return super()._infer_expr_type(text, known)
+        if '"' in stripped or "'" in stripped:
+            return "string"
+        if stripped in {"true", "false"}:
+            return "bool"
+        if "." in stripped and stripped.replace(".", "").isdigit():
+            return "double"
+        return "int"
 
     def _binary_expr(
         self,
@@ -393,8 +356,8 @@ class JavaBackend(BaseBackend):
     ) -> str:
         left_expr = self._expr(left)
         right_expr = self._expr(right)
-        left_type = self._infer_expr_type(left, types)
-        right_type = self._infer_expr_type(right, types)
+        left_type = self._expr_type(left, types)
+        right_type = self._expr_type(right, types)
 
         left_name = self._internal_type_name(left_type)
         right_name = self._internal_type_name(right_type)
@@ -505,3 +468,38 @@ class JavaBackend(BaseBackend):
             "ArrayList<Integer>": "new ArrayList<>()",
         }
         return f"{self._pad(indent)}return {defaults.get(return_type, 'null')};"
+
+    def _pad(self, indent: int) -> str:
+        return " " * (4 * indent)
+
+    def _has_return(self, instructions: list[TACInstruction]) -> bool:
+        return any(inst.kind == "return" for inst in instructions)
+
+    def _ordered_locals(self, fn: TACFunction, params: set[str]) -> list[str]:
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        for inst in fn.instructions:
+            target = inst.target if inst.kind in {"assign", "binop", "unop", "call"} else None
+            if target and target in fn.locals and target not in params and target not in seen:
+                ordered.append(target)
+                seen.add(target)
+
+        for name in sorted(var for var in fn.locals if var not in params and var not in seen):
+            ordered.append(name)
+
+        return ordered
+
+    def _find_constructor(self, cls: TACClass) -> TACFunction | None:
+        for method in cls.methods:
+            if method.name == "__init__":
+                return method
+        return None
+
+    def _is_instance_method(self, method: TACFunction) -> bool:
+        return bool(method.params) and method.params[0] == "self"
+
+    def _user_params(self, method: TACFunction) -> list[str]:
+        if self._is_instance_method(method):
+            return method.params[1:]
+        return method.params
