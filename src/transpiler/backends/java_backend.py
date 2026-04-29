@@ -414,13 +414,12 @@ class JavaBackend:
                 "null": "Object",
                 "None": "void",
             }.get(name, name)
-        return {
-            "string": "String",
-            "bool": "boolean",
-            "list": self._java_type_from_named_collection("ArrayList<Integer>", "ArrayList"),
-            "map": self._java_type_from_named_collection("HashMap<Object, Object>", "HashMap"),
-            "set": self._java_type_from_named_collection("HashSet<Object>", "HashSet"),
-        }.get(typ, typ)
+        if typ == "string": return "String"
+        if typ == "bool": return "boolean"
+        if typ == "list": return self._java_type_from_named_collection("ArrayList<Integer>", "ArrayList")
+        if typ == "map": return self._java_type_from_named_collection("HashMap<Object, Object>", "HashMap")
+        if typ == "set": return self._java_type_from_named_collection("HashSet<Object>", "HashSet")
+        return str(typ)
 
     def _java_type_from_named_collection(self, rendered: str, collection: str) -> str:
         self.imports.add(f"import java.util.{collection};")
