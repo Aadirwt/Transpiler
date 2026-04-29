@@ -100,7 +100,9 @@ class Lexer:
         indent_stack = [0]
 
         for line_no, raw_line in enumerate(self.source.split("\n"), start=1):
+            # replacing tab with 4 spaces
             expanded = raw_line.replace("\t", "    ")
+            # for removing comments
             uncommented = self._strip_comment(expanded).rstrip()
             if not uncommented.strip():
                 continue
