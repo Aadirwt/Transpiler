@@ -26,10 +26,6 @@ class Parser:
         if self.pos < len(self.tokens):
             self.current = self.tokens[self.pos]
 
-    def peek(self, k: int = 1) -> Token:
-        pos = self.pos + k
-        return self.tokens[pos] if pos < len(self.tokens) else self.tokens[-1]
-
     def eat(self, token_type: TokenType) -> Token:
         if self.current.type == token_type:
             tok = self.current
@@ -583,12 +579,13 @@ class Parser:
             elif self.match(TokenType.STAR):
                 self.advance()
                 args.append(StarExpr(self.expr()))
-            elif self.match(TokenType.IDENTIFIER) and self.peek().type == TokenType.ASSIGN:
-                key = self.eat(TokenType.IDENTIFIER).value
-                self.advance()
-                kwargs.append((key, self.expr()))
             else:
-                args.append(self.expr())
+                arg_expr = self.expr()
+                if isinstance(arg_expr, Identifier) and self.match(TokenType.ASSIGN):
+                    self.advance()
+                    kwargs.append((arg_expr.name, self.expr()))
+                else:
+                    args.append(arg_expr)
             if self.match(TokenType.COMMA):
                 self.advance()
         self.eat(TokenType.RPAREN)
